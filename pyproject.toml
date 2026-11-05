@@ -1,0 +1,31 @@
+[project]
+name = "llm-architecture-comparison"
+version = "0.1.0"
+description = "Transformer, MDLM, Mamba and DeltaBlock language models on FineWeb-Edu"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "fla-core>=0.6.0",
+    "huggingface-hub>=1.24.0",
+    "matplotlib>=3.11.1",
+    "numpy>=2.5.1",
+    "pyarrow>=26.0.0",
+    "torch>=2.12.1",
+    "transformers>=5.14.1",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+]
+
+[project.optional-dependencies]
+# Fused CUDA selective-scan kernel (needs nvcc + torch with CUDA at build time):
+#   uv sync --extra mamba   (or: uv pip install mamba-ssm causal-conv1d --no-build-isolation)
+mamba = ["mamba-ssm", "ninja"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.uv.extra-build-dependencies]
+mamba-ssm = ["torch", "setuptools"]
