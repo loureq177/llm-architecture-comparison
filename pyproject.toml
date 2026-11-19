@@ -18,4 +18,4 @@ dependencies = [
 mamba = ["mamba-ssm", "ninja"]
 
 [tool.uv.extra-build-dependencies]
-mamba-ssm = ["torch", "setuptools"]
+mamba-ssm = [{ requirement = "torch", match-runtime = true }, "setuptools"]
