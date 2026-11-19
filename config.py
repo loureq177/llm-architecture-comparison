@@ -11,6 +11,15 @@ PRESETS = {
         max_steps=20700, warmup_steps=1000,
         eval_interval=1000, eval_batches=32, save_interval=250,
     ),
+    # RTX 5070 Ti: same recipe as 4gb (20 tokens/param, 32k tokens/step, cosine), width x2;
+    # ~48 h for all four models, estimated from the 4gb logs - check the ETA lines before committing.
+    "16gb": dict(
+        run_name="16gb",
+        dim_model=768, n_head=12, n_layers=8, max_seq_len=1024, train_shards=20,
+        batch_size=16, grad_accum_steps=2, micro_batch={"deltablock": 8},
+        max_steps=58700, warmup_steps=1000,
+        eval_interval=1000, eval_batches=8, save_interval=500,
+    ),
     "helios": dict(
         run_name="helios", lm_subset="sample/100BT", train_shards=485,
         dim_model=1280, n_head=10, n_layers=24, max_seq_len=2048,
