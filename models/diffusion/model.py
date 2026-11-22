@@ -2,6 +2,7 @@ import torch
 from torch import nn
 from torch.nn import functional as F
 
+from decoding import sample_next
 from losses import token_nll, weighted_ce
 
 
@@ -94,3 +95,14 @@ class DiffusionLanguageModel(nn.Module):
             nll = token_nll(self.features(x_t)[mask], self.head_weight, x0[mask])
             total += (nll / t[:, None].expand(B, T)[mask]).sum().double()
         return total / n_mc, region.sum()
+
+    @torch.no_grad()
+    def sample(self, prompt, new_tokens, steps, temperature=0.0, chunk=128):
+        B, P = prompt.shape
+        x = torch.cat([prompt, prompt.new_full((B, new_tokens), self.mask_token_id)], 1)
+        for i in range(steps):
+            unmask = (x == self.mask_token_id) & (torch.rand(x.shape, device=x.device) < 1.0 / (steps - i))
+            h = self.features(x)[unmask]
+            x[unmask] = torch.cat([sample_next(F.linear(h[s : s + chunk], self.head_weight), temperature)
+                                   for s in range(0, h.size(0), chunk)] or [x.new_zeros(0)])
+        return x[:, P:]

@@ -2,6 +2,8 @@ import torch
 from torch import nn
 from torch.nn import functional as F
 
+from decoding import generate_eager, generate_graphed
+
 
 class CausalMultiHeadAttention(nn.Module):
     def __init__(self, dim_model, n_head):
@@ -14,6 +16,21 @@ class CausalMultiHeadAttention(nn.Module):
         B, T, C = x.size()
         q, k, v = (t.view(B, T, self.n_head, -1).transpose(1, 2) for t in self.qkv_proj(x).split(C, -1))
         out = F.scaled_dot_product_attention(q, k, v, is_causal=True)
+        return self.out_proj(out.transpose(1, 2).reshape(B, T, C))
+
+    def cached(self, x, st, pos=None):
+        B, T, C = x.size()
+        q, k, v = (t.view(B, T, self.n_head, -1).transpose(1, 2) for t in self.qkv_proj(x).split(C, -1))
+        k_cache, v_cache = st
+        if pos is None:
+            k_cache[:, :, :T].copy_(k)
+            v_cache[:, :, :T].copy_(v)
+            out = F.scaled_dot_product_attention(q, k, v, is_causal=True)
+        else:
+            k_cache.index_copy_(2, pos.view(1), k)
+            v_cache.index_copy_(2, pos.view(1), v)
+            valid = torch.arange(k_cache.size(2), device=x.device) <= pos
+            out = F.scaled_dot_product_attention(q, k_cache, v_cache, attn_mask=valid)
         return self.out_proj(out.transpose(1, 2).reshape(B, T, C))
 
 
@@ -37,6 +54,10 @@ class TransformerBlock(nn.Module):
 
     def forward(self, x):
         x = x + self.attn(self.ln_1(x))
+        return x + self.ffwd(self.ln_2(x))
+
+    def cached(self, x, st, pos=None):
+        x = x + self.attn.cached(self.ln_1(x), st, pos)
         return x + self.ffwd(self.ln_2(x))
 
 
@@ -74,3 +95,26 @@ class LanguageModel(nn.Module):
 
     def forward(self, idx):
         return self.lm_head(self.features(idx))
+
+    def alloc_decode_state(self, batch, max_len):
+        w, n_head = self.head_weight, self.blocks[0].attn.n_head
+        shape = (batch, n_head, max_len, w.size(1) // n_head)
+        return [(w.new_zeros(shape), w.new_zeros(shape)) for _ in self.blocks]
+
+    def _cached(self, idx, state, pos=None):
+        p = torch.arange(idx.size(1), device=idx.device) if pos is None else pos.view(1)
+        x = self.token_embedding(idx) + self.position_embedding(p)
+        for block, st in zip(self.blocks, state):
+            x = block.cached(x, st, pos)
+        return self.lm_head(self.ln_f(x[:, -1]))
+
+    def prefill_into(self, state, prompt):
+        return self._cached(prompt, state)
+
+    def decode_step(self, tok, pos, state):
+        return self._cached(tok[:, None], state, pos)
+
+    @torch.no_grad()
+    def generate(self, prompt, new_tokens, temperature=0.0, cuda_graph=False):
+        decode = generate_graphed if cuda_graph else generate_eager
+        return decode(self, prompt, new_tokens, temperature)

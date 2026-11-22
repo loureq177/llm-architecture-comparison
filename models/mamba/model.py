@@ -10,6 +10,12 @@ try:
     HAS_KERNEL = True
 except Exception:
     HAS_KERNEL = False
+try:
+    from mamba_ssm.ops.triton.selective_state_update import selective_state_update
+except Exception:
+    selective_state_update = None
+
+from decoding import generate_eager, generate_graphed
 
 
 class S6(nn.Module):
@@ -36,7 +42,7 @@ class S6(nn.Module):
         with torch.no_grad():
             self.dt_proj.bias.copy_(dt + torch.log(-torch.expm1(-dt)))
 
-    def forward(self, x):
+    def forward(self, x, h_out=None):
         A = -torch.exp(self.A_log.float())
         dt_r, B, C = torch.split(self.x_proj(x), [self.dt_rank, self.d_state, self.d_state], dim=-1)
         if self.use_kernel and HAS_KERNEL and x.is_cuda:
@@ -50,14 +56,33 @@ class S6(nn.Module):
                 z=None,
                 delta_bias=self.dt_proj.bias.float(),
                 delta_softplus=True,
+                return_last_state=h_out is not None,
             )
+            if h_out is not None:
+                y, last = y
+                h_out.copy_(last)
             return y.transpose(1, 2)
         xf = x.float()
         delta = F.softplus(self.dt_proj(dt_r).float())
         dA = torch.exp(delta.unsqueeze(-1) * A)
         Bx = delta.unsqueeze(-1) * B.float().unsqueeze(-2) * xf.unsqueeze(-1)
         H = _parallel_scan(dA, Bx)
+        if h_out is not None:
+            h_out.copy_(H[:, -1])
         return (torch.einsum("btdn,btn->btd", H, C.float()) + xf * self.D).to(x.dtype)
+
+    def step(self, x, h):
+        A = -torch.exp(self.A_log.float())
+        dt_r, B, C = torch.split(self.x_proj(x), [self.dt_rank, self.d_state, self.d_state], dim=-1)
+        if self.use_kernel and selective_state_update is not None and x.is_cuda:
+            return selective_state_update(
+                h, x, F.linear(dt_r, self.dt_proj.weight), A, B, C, self.D.float(),
+                z=None, dt_bias=self.dt_proj.bias.float(), dt_softplus=True,
+            )
+        delta = F.softplus(self.dt_proj(dt_r).float())
+        h.copy_(torch.exp(delta.unsqueeze(-1) * A) * h
+                + delta.unsqueeze(-1) * B.float().unsqueeze(1) * x.float().unsqueeze(-1))
+        return ((h * C.float().unsqueeze(1)).sum(-1) + x.float() * self.D).to(x.dtype)
 
 
 def _parallel_scan(a, b):
@@ -83,6 +108,27 @@ class MambaBlock(nn.Module):
         x_in, z = self.in_proj(x).chunk(2, dim=-1)
         x_conv = F.silu(self.conv1d(x_in.transpose(1, 2))[:, :, : x.size(1)]).transpose(1, 2)
         return self.out_proj(self.s6(x_conv) * F.silu(z))
+
+    def init_state(self, B, device, dtype):
+        d_inner, k = self.conv1d.weight.size(0), self.conv1d.weight.size(-1)
+        return (torch.zeros(B, d_inner, k - 1, device=device, dtype=dtype),
+                torch.zeros(B, d_inner, self.s6.d_state, device=device, dtype=torch.float32))
+
+    def prefill(self, x, st):
+        conv, h = st
+        x_in, z = self.in_proj(x).chunk(2, dim=-1)
+        x_t = x_in.transpose(1, 2)
+        conv.copy_(F.pad(x_t, (conv.size(-1), 0))[:, :, -conv.size(-1):])
+        x_conv = F.silu(self.conv1d(x_t)[:, :, : x.size(1)]).transpose(1, 2)
+        return self.out_proj(self.s6(x_conv, h_out=h) * F.silu(z))
+
+    def step(self, x, st):
+        conv, h = st
+        x_in, z = self.in_proj(x).chunk(2, dim=-1)
+        window = torch.cat([conv, x_in.unsqueeze(-1)], dim=-1)
+        conv.copy_(window[:, :, 1:])
+        x_conv = F.silu((window * self.conv1d.weight[:, 0]).sum(-1) + self.conv1d.bias)
+        return self.out_proj(self.s6.step(x_conv, h) * F.silu(z))
 
 
 class MambaLanguageModel(nn.Module):
@@ -125,3 +171,24 @@ class MambaLanguageModel(nn.Module):
 
     def forward(self, idx):
         return self.lm_head(self.features(idx))
+
+    def alloc_decode_state(self, batch, max_len):
+        w = self.head_weight
+        return [b.init_state(batch, w.device, w.dtype) for b in self.blocks]
+
+    def prefill_into(self, state, prompt):
+        x = self.token_embedding(prompt)
+        for norm, block, st in zip(self.norms, self.blocks, state):
+            x = x + block.prefill(norm(x), st)
+        return self.lm_head(self.ln_f(x[:, -1]))
+
+    def decode_step(self, tok, pos, state):
+        x = self.token_embedding(tok)
+        for norm, block, st in zip(self.norms, self.blocks, state):
+            x = x + block.step(norm(x), st)
+        return self.lm_head(self.ln_f(x))
+
+    @torch.no_grad()
+    def generate(self, prompt, new_tokens, temperature=0.0, cuda_graph=False):
+        decode = generate_graphed if cuda_graph else generate_eager
+        return decode(self, prompt, new_tokens, temperature)
