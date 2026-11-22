@@ -40,6 +40,16 @@ def _warn(what, e):
     print(f"[tracking] {what} failed ({type(e).__name__}: {e}) - training goes on without it", flush=True)
 
 
+def _config():
+    """Run configuration as flat scalars (the dashboard stores it as Parquet)."""
+    out = {}
+    for k, v in vars(cfg).items():
+        if k.startswith("_") or k == "root_dir":
+            continue
+        out[k] = v if v is None or isinstance(v, (bool, int, float, str)) else str(v)
+    return out
+
+
 def start(key):
     global _run
     if not enabled():
@@ -48,7 +58,7 @@ def start(key):
         import trackio
 
         _run = trackio.init(project=PROJECT, name=f"{cfg.run_name}/{key}", resume="allow", embed=False,
-                            config={k: v for k, v in vars(cfg).items() if not k.startswith("_") and k != "root_dir"})
+                            config=_config())
     except Exception as e:
         _warn("live dashboard", e)
 
