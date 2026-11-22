@@ -237,11 +237,11 @@ def main():
         kind, label = key.split("/", 1)
         results["models"][kind]["generation"][label].update(gen_ppl=value, gen_ppl_sem=sem)
     save()
-    if tracking.enabled():  # add the results to the training run of every model
+    if tracking.enabled():  # results as the last point of every model's training curves
         for kind in args.models:
+            r = results["models"][kind]
             tracking.start(kind)
-            tracking.summary(results["models"][kind], "eval/")
-            tracking.summary(results["data"], "eval/data/")
+            tracking.log({"step": r["trained_steps"], **r, "data": results["data"]}, prefix="final/")
             tracking.finish()
     for kind in args.models:
         r = results["models"][kind]

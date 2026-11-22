@@ -11,8 +11,8 @@ dependencies = [
     "numpy>=2.5.1",
     "pyarrow>=26.0.0",
     "torch>=2.12.1",
+    "trackio==0.45.0",
     "transformers>=5.14.1",
-    "wandb>=0.22,<0.31",
 ]
 
 [project.optional-dependencies]

@@ -93,7 +93,7 @@ def run_loop(model, loss_fn, name, save_path, eval_fn, resume=False, step_hook=N
     elif os.path.exists(log_path) and main:
         os.remove(log_path)
     if main:
-        tracking.start(key, fresh=start == 0)
+        tracking.start(key)
 
     def log(record):
         if main:

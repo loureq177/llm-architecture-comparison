@@ -8,6 +8,7 @@
 #SBATCH --output=%x-%j.log
 
 set -euo pipefail
+: "${HF_TOKEN:?export HF_TOKEN before sbatch (README)}"
 cd "$SLURM_SUBMIT_DIR"
 export HF_HOME=${HF_HOME:-$SCRATCH/hf} UV_CACHE_DIR=$SCRATCH/uv TRITON_CACHE_DIR=$SCRATCH/triton
 export UV_PROJECT_ENVIRONMENT=.venv-$(uname -m) UV_FROZEN=1
@@ -24,5 +25,7 @@ for attempt in 1 2 3; do
         train_all.py --preset helios --models deltablock --resume --deadline $(( end - 2700 )) && break
 done
 if [ -f checkpoints/helios/deltablock.pt ]; then
+    uv run python tracking.py upload --preset helios --models deltablock || true   # the model first
     uv run python evaluate.py --preset helios --models deltablock
+    uv run python tracking.py upload --preset helios --models deltablock            # + results
 fi
