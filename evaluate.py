@@ -18,6 +18,7 @@ import time
 import numpy as np
 import torch
 
+import tracking
 from config import PRESETS, cfg
 from dataset import eval_batches, get_tokenizer
 from decoding import release_graph
@@ -126,7 +127,7 @@ def generative_perplexity(samples, judge_name):
     out = {}
     for label, tokens in samples.items():
         per_seq = []
-        for row in tokens:
+        for row in tokens[:, : judge.config.n_positions - 1]:  # GPT-2 sees at most 1024 tokens
             ids = torch.cat([row.new_tensor([eos]), row]).to(cfg.device)[None]
             hidden = judge.base_model(ids).last_hidden_state[0, :-1]
             per_seq.append(token_nll(hidden, head, ids[0, 1:]).double().mean().item())
@@ -191,6 +192,8 @@ def main():
         r = {"params_M": sum(p.numel() for p in model.parameters()) / 1e6, "trained_steps": steps,
              "train_tokens_M": steps * cfg.batch_size * cfg.grad_accum_steps * cfg.max_seq_len / 1e6,
              **training_stats(kind), **test_perplexity(kind, model, args.split, args.ppl_batches, args.n_mc)}
+        results["models"][kind] = r
+        save()
         model = to_inference(model)
         torch.cuda.empty_cache()
 
@@ -234,6 +237,12 @@ def main():
         kind, label = key.split("/", 1)
         results["models"][kind]["generation"][label].update(gen_ppl=value, gen_ppl_sem=sem)
     save()
+    if tracking.enabled():  # add the results to the training run of every model
+        for kind in args.models:
+            tracking.start(kind)
+            tracking.summary(results["models"][kind], "eval/")
+            tracking.summary(results["data"], "eval/data/")
+            tracking.finish()
     for kind in args.models:
         r = results["models"][kind]
         for label, g in r["generation"].items():

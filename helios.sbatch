@@ -21,5 +21,8 @@ uv run python prepare_data.py --preset helios --workers $(( $(nproc) < 128 ? $(n
 end=$(date -d "$(squeue -h -j "$SLURM_JOB_ID" -o %e)" +%s)
 for attempt in 1 2 3; do
     uv run python -m torch.distributed.run --standalone --nproc_per_node=4 \
-        train_all.py --preset helios --models deltablock --resume --deadline $(( end - 1800 )) && break
+        train_all.py --preset helios --models deltablock --resume --deadline $(( end - 2700 )) && break
 done
+if [ -f checkpoints/helios/deltablock.pt ]; then
+    uv run python evaluate.py --preset helios --models deltablock
+fi

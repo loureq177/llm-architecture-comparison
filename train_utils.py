@@ -6,6 +6,7 @@ import time
 import torch
 
 import distributed
+import tracking
 from config import cfg
 from dataset import train_batches
 from losses import weighted_ce
@@ -91,11 +92,14 @@ def run_loop(model, loss_fn, name, save_path, eval_fn, resume=False, step_hook=N
         del ck
     elif os.path.exists(log_path) and main:
         os.remove(log_path)
+    if main:
+        tracking.start(key, fresh=start == 0)
 
     def log(record):
         if main:
             with open(log_path, "a") as f:
                 f.write(json.dumps(record) + "\n")
+            tracking.log(record)
 
     def sync():
         if cfg.device == "cuda":
@@ -195,5 +199,6 @@ def run_loop(model, loss_fn, name, save_path, eval_fn, resume=False, step_hook=N
 
     if main:
         save_checkpoint(save_path, state_dict=model.state_dict(), cfg=vars(cfg), step=step, elapsed_s=elapsed)
+        tracking.finish()
     print(f"[{name}] saved {save_path}")
     return model

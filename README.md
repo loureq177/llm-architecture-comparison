@@ -10,14 +10,17 @@ On the login node, in `$SCRATCH`:
 
 ```bash
 git clone https://github.com/loureq177/llm-architecture-comparison && cd llm-architecture-comparison
+export WANDB_API_KEY=<key from wandb.ai/authorize>   # live curves on wandb.ai
 sbatch -A <grant>-gpu-gh200 helios.sbatch
 ```
 
 The job (one node, 4x GH200, 48 h) builds the environment, tokenizes ~50B
 tokens of FineWeb-Edu sample-100BT and trains DeltaBlock 0.55B on the 4 GPUs
-until 30 minutes before the end of the job. Progress: `deltablock-<job id>.log`,
+until 45 minutes before the end of the job. Progress: `deltablock-<job id>.log`,
 metrics: `logs/helios/deltablock.jsonl`, model: `checkpoints/helios/deltablock.pt`.
-Submitting it again resumes. Set `HF_TOKEN` to avoid Hugging Face download limits.
+After training, the last 45 minutes run `evaluate.py` (test perplexity, generation
+speed and quality) -> `results/helios/metrics.json`, also added to the W&B run
+(project `llm-architecture-comparison`). Submitting it again resumes. Set `HF_TOKEN` to avoid Hugging Face download limits.
 
 ## Single GPU (RTX 5070 Ti, 16 GB)
 
