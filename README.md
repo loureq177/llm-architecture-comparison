@@ -3,8 +3,8 @@
 Transformer, MDLM, Mamba and DeltaBlock (block diffusion on a KDA/attention hybrid)
 trained on FineWeb-Edu. Needs a Hugging Face "Write" token
 (huggingface.co/settings/tokens); models, logs and results go to the private repo
-`<user>/llm-architecture-comparison`, live curves to the private Space
-`<user>/llm-architecture-comparison-live`.
+`<user>/llm-architecture-comparison`, live curves (refreshed every 10 min) to the
+public Space `<user>/llm-architecture-comparison-curves`.
 
 ```bash
 read -rs HF_TOKEN && export HF_TOKEN   # paste the token (not shown, not kept in the history)

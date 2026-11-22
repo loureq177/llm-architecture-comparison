@@ -1,11 +1,12 @@
 """Hugging Face: live training curves (Trackio) and storage of the trained models.
 
 Everything is on when HF_TOKEN (a "Write" token from huggingface.co/settings/tokens)
-is set, off otherwise. Both repositories are private, in the token owner's account:
+is set, off otherwise. In the token owner's account:
 
-  * Space  <user>/llm-architecture-comparison-live : dashboard of the training curves,
-    one run "<preset>/<model>" per model, continued by a resubmitted job;
-  * model  <user>/llm-architecture-comparison      : weights, training logs and
+  * Space  <user>/llm-architecture-comparison-curves (public, free static Space):
+    dashboard of the training curves, one run "<preset>/<model>" per model, refreshed
+    every SYNC_EVERY seconds. Trackio logs locally; the dashboard reads a snapshot.
+  * model  <user>/llm-architecture-comparison (private): weights, training logs and
     results, at the same paths as here (checkpoints/<preset>/, logs/, results/).
 
     python tracking.py upload --preset helios --models deltablock     # where it was trained
@@ -13,12 +14,16 @@ is set, off otherwise. Both repositories are private, in the token owner's accou
 """
 
 import os
+import threading
+import time
 
 from config import cfg
 
 PROJECT = "llm-architecture-comparison"
 KINDS = ["transformer", "diffusion", "mamba", "deltablock"]
+SYNC_EVERY = 600
 _run = None
+_sync = {"last": 0.0, "deployed": False, "thread": None}
 
 
 def enabled():
@@ -42,11 +47,41 @@ def start(key):
     try:
         import trackio
 
-        _run = trackio.init(project=PROJECT, name=f"{cfg.run_name}/{key}", space_id=f"{_user()}/{PROJECT}-live",
-                            private=True, resume="allow", embed=False,
-                            config={k: v for k, v in vars(cfg).items() if not k.startswith("_")})
+        _run = trackio.init(project=PROJECT, name=f"{cfg.run_name}/{key}", resume="allow", embed=False,
+                            config={k: v for k, v in vars(cfg).items() if not k.startswith("_") and k != "root_dir"})
     except Exception as e:
         _warn("live dashboard", e)
+
+
+def _publish():
+    """Pushes a snapshot of the local Trackio project to the static dashboard Space."""
+    try:
+        import trackio
+        from trackio.bucket_storage import upload_project_to_bucket_for_static
+
+        name = f"{_user()}/{PROJECT}-curves"
+        if not _sync["deployed"]:  # first time: Space, bucket and data
+            trackio.sync(PROJECT, space_id=name, bucket_id=f"{name}-data", sdk="static", force=True)
+            _sync["deployed"] = True
+            print(f"[tracking] live curves: https://huggingface.co/spaces/{name}", flush=True)
+        else:
+            upload_project_to_bucket_for_static(PROJECT, f"{name}-data")
+    except Exception as e:
+        _warn("dashboard refresh", e)
+
+
+def _refresh(force=False):
+    t = _sync["thread"]
+    if t is not None and t.is_alive():
+        if not force:
+            return
+        t.join()
+    if force or time.time() - _sync["last"] >= SYNC_EVERY:
+        _sync["last"] = time.time()
+        _sync["thread"] = threading.Thread(target=_publish, daemon=True)
+        _sync["thread"].start()
+        if force:
+            _sync["thread"].join()
 
 
 def _flat(d, prefix=""):
@@ -70,6 +105,7 @@ def log(record, prefix=""):
         trackio.log(_flat(r, prefix), step=step)
     except Exception as e:
         _warn("logging", e)
+    _refresh()
 
 
 def finish():
@@ -83,6 +119,7 @@ def finish():
     except Exception as e:
         _warn("finish", e)
     _run = None
+    _refresh(force=True)
 
 
 def _files(key):
